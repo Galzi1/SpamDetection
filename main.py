@@ -34,6 +34,13 @@ def get_all_words(words_col_df):
 
 
 # Preprocessing functions
+def remove_empty_words(row):
+    if len(row['Words']) == 0:
+        row['Words'] = np.nan
+    else:
+        row['Words'] = list(filter(None, row['Words']))
+    return row
+
 def to_lowercase(row):
     if type(row) is str:
         return row.lower()
@@ -122,6 +129,11 @@ def preprocess(df):
     df = df.apply(stopwords_cleaner, axis=1)
     df = df.apply(stem_text, axis=1)
     # df = df.apply(lemm_text, axis=1)
+    df[BODY].replace('', np.nan, inplace=True)
+    df = df.apply(remove_empty_words, axis=1)
+    print(df[BODY].isna().sum())
+    print(df['Words'].isna().sum())
+    df.dropna(subset=[BODY, 'Words'], inplace=True)
     return df
 
 
@@ -201,7 +213,7 @@ def standardize_columns(df_cols):
     df_standardized.columns = names
     return df_standardized
 
-# tODO: remove spaces throughout, both in body and in words
+# TODO: remove spaces throughout, both in body and in words
 def create_features(df):
     df['Words_Count'] = df.apply(words_count, axis=1)
     df['Chars_Count'] = df.apply(characters_count, axis=1)
@@ -302,7 +314,7 @@ tok.fit_on_texts(X_train_text)
 sequences = tok.texts_to_sequences(X_train_text)
 sequences_matrix = sequence.pad_sequences(sequences, maxlen=max_len)
 
-feats_matrix = np.int_(X_train_feats.to_numpy())
+feats_matrix = X_train_feats.to_numpy()
 full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
 
 model = RNN(np.size(full_matrix, 1))
