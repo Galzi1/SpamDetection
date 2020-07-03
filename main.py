@@ -302,7 +302,7 @@ tok.fit_on_texts(X_train_text)
 sequences = tok.texts_to_sequences(X_train_text)
 sequences_matrix = sequence.pad_sequences(sequences, maxlen=max_len)
 
-feats_matrix = np.int_(X_train_feats.to_numpy())
+feats_matrix = np.float_(X_train_feats.to_numpy())
 full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
 
 model = RNN(np.size(full_matrix, 1))
