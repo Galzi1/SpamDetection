@@ -1,3 +1,8 @@
+##################
+# Name: Gal Ziv
+# ID:   205564198
+##################
+
 import nltk
 import pandas as pd
 import re
@@ -21,6 +26,7 @@ from keras.preprocessing.text import Tokenizer
 from keras.preprocessing import sequence
 from keras.utils import to_categorical
 from keras.callbacks import EarlyStopping
+from textblob import TextBlob
 
 
 TARGET = 'Category'
@@ -32,8 +38,8 @@ def get_all_words(words_col_df):
         for word in words:
             yield word
 
-
-# Preprocessing functions
+#########################################################################
+### Preprocessing functions
 def to_lowercase(row):
     if type(row) is str:
         return row.lower()
@@ -113,6 +119,25 @@ def normalise_text(row):
     return row
 
 
+def normalize_columns(df_cols):
+    names = df_cols.columns
+    x = df_cols.values
+    min_max_scaler = preprocessing.MinMaxScaler()
+    x_scaled = min_max_scaler.fit_transform(x)
+    df_normalized = pd.DataFrame(x_scaled)
+    df_normalized.columns = names
+    return df_normalized
+
+def standardize_columns(df_cols):
+    names = df_cols.columns
+    x = df_cols.values
+    scaler = preprocessing.StandardScaler()
+    x_scaled = scaler.fit_transform(x)
+    df_standardized = pd.DataFrame(x_scaled)
+    df_standardized.columns = names
+    return df_standardized
+
+
 def preprocess(df):
     df = df.apply(remove_punctuation, axis=1)
     df = df.apply(remove_special_characters, axis=1)
@@ -124,8 +149,8 @@ def preprocess(df):
     # df = df.apply(lemm_text, axis=1)
     return df
 
-
-# Feature Creation functions
+#######################################################################
+### Feature Creation functions
 def words_count(row):
     words_no_punct = [word for word in row['Words'] if not any(char in set(string.punctuation) for char in word)]
     return len(words_no_punct)
@@ -183,23 +208,9 @@ def currency_count(row):
     return len(curr)
 
 
-def normalize_columns(df_cols):
-    names = df_cols.columns
-    x = df_cols.values
-    min_max_scaler = preprocessing.MinMaxScaler()
-    x_scaled = min_max_scaler.fit_transform(x)
-    df_normalized = pd.DataFrame(x_scaled)
-    df_normalized.columns = names
-    return df_normalized
+def get_sentiment(row):
+    return TextBlob(row[BODY]).sentiment
 
-def standardize_columns(df_cols):
-    names = df_cols.columns
-    x = df_cols.values
-    scaler = preprocessing.StandardScaler()
-    x_scaled = scaler.fit_transform(x)
-    df_standardized = pd.DataFrame(x_scaled)
-    df_standardized.columns = names
-    return df_standardized
 
 # tODO: remove spaces throughout, both in body and in words
 def create_features(df):
@@ -215,13 +226,21 @@ def create_features(df):
     df['ExcMark_Count'] = df.apply(excmark_count, axis=1)
     df['Quotes_Count'] = df.apply(quotes_count, axis=1)
     df['Currency_Count'] = df.apply(currency_count, axis=1)
+
+    df['Sentiment_Score'] = df.apply(get_sentiment, axis=1)
+    sentiment_series = df['Sentiment_Score'].tolist()
+    columns = ['Polarity', 'Subjectivity']
+    temp_df = pd.DataFrame(sentiment_series, columns=columns, index=df.index)
+    df['Polarity'] = temp_df['Polarity']
+    df['Subjectivity'] = temp_df['Subjectivity']
+    df = df.drop(['Sentiment_Score'], axis=1)
     return df
 
 
 # feature selection
 def select_features(X_train, y_train):
     # configure to select a subset of features
-    fs = SelectFromModel(RandomForestClassifier(n_estimators=1000), max_features=10)
+    fs = SelectFromModel(RandomForestClassifier(n_estimators=1000))
     # learn relationship from training data
     fs.fit(X_train, y_train)
     # transform train input data
@@ -315,7 +334,7 @@ X_test_text = X_test['PP_Message']
 X_test_feats = X_test.drop('PP_Message', axis=1)
 test_sequences = tok.texts_to_sequences(X_test_text)
 test_sequences_matrix = sequence.pad_sequences(test_sequences, maxlen=max_len)
-test_feats_matrix = np.int_(X_test_feats.to_numpy())
+test_feats_matrix = np.float_(X_test_feats.to_numpy())
 test_full_matrix = np.concatenate((test_sequences_matrix, test_feats_matrix), axis=1)
 
 accr = model.evaluate(test_full_matrix, Y_test)
