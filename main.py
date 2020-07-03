@@ -17,10 +17,13 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn import preprocessing
 from sklearn.feature_selection import SelectFromModel
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
 from nltk.tokenize.punkt import PunktSentenceTokenizer as PST
 from nltk import FreqDist
 from keras.models import Model
 from keras.layers import LSTM, Activation, Dense, Dropout, Input, Embedding
+from keras.wrappers.scikit_learn import KerasClassifier
+from sklearn.model_selection import RandomizedSearchCV
 from keras.optimizers import RMSprop
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing import sequence
@@ -32,6 +35,8 @@ from imblearn.over_sampling import SMOTE
 
 TARGET = 'Category'
 BODY = 'Message'
+USE_FEATURES = False
+HANDLE_IMBALANCE = False
 
 
 def get_all_words(words_col_df):
@@ -265,10 +270,11 @@ def handle_imbalance(x_train, y_train):
 
     return x_train_res, y_train_res
 
+
 # Training models
-def RNN(length):
-    inputs = Input(name='inputs', shape=[length])
-    layer = Embedding(max_words, 50, input_length=length)(inputs)
+def RNN(vocab_size, embedding_dim, maxlen):
+    inputs = Input(name='inputs', shape=[maxlen])
+    layer = Embedding(vocab_size, embedding_dim, input_length=maxlen)(inputs)
     layer = LSTM(64)(layer)
     layer = Dense(256, name='FC1')(layer)
     layer = Activation('relu')(layer)
@@ -276,6 +282,7 @@ def RNN(length):
     layer = Dense(1, name='out_layer')(layer)
     layer = Activation('sigmoid')(layer)
     model = Model(inputs=inputs, outputs=layer)
+    model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
     return model
 
 
@@ -302,9 +309,9 @@ data[TARGET] = data[TARGET].replace({'ham': 0}, {'spam': 1})
 # plt.title('Label categories')
 # plt.show()
 
-all_words = get_all_words(data['PP_Words'])
-freq_dist_pos = FreqDist(all_words)
-print(freq_dist_pos.most_common(10))
+# all_words = get_all_words(data['PP_Words'])
+# freq_dist_pos = FreqDist(all_words)
+# print(freq_dist_pos.most_common(10))
 ###
 
 data.to_csv("temp.csv")
@@ -337,25 +344,42 @@ tok.fit_on_texts(X_train_text)
 sequences = tok.texts_to_sequences(X_train_text)
 sequences_matrix = sequence.pad_sequences(sequences, maxlen=max_len)
 
-feats_matrix = np.float_(X_train_feats.to_numpy())
-full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
+if USE_FEATURES:
+    feats_matrix = np.float_(X_train_feats.to_numpy())
+    full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
+else:
+    full_matrix = sequences_matrix
 
-full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
+if HANDLE_IMBALANCE:
+    full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
-model = RNN(np.size(full_matrix, 1))
-model.summary()
-model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
-model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
-          validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
+param_grid = dict(vocab_size=[max_words],
+                  embedding_dim=[50],
+                  maxlen=[np.size(full_matrix, 1)])
+
+model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
+# model = RNN()
+# model.summary()
+# model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
+# model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
+#           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
+
+grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid, cv=4, verbose=1, n_iter=5)
+grid_result = grid.fit(full_matrix, Y_train)
 
 X_test_text = X_test['PP_Message']
 X_test_feats = X_test.drop('PP_Message', axis=1)
 test_sequences = tok.texts_to_sequences(X_test_text)
 test_sequences_matrix = sequence.pad_sequences(test_sequences, maxlen=max_len)
-test_feats_matrix = np.float_(X_test_feats.to_numpy())
-test_full_matrix = np.concatenate((test_sequences_matrix, test_feats_matrix), axis=1)
+if USE_FEATURES:
+    test_feats_matrix = np.float_(X_test_feats.to_numpy())
+    test_full_matrix = np.concatenate((test_sequences_matrix, test_feats_matrix), axis=1)
+else:
+    test_full_matrix = test_sequences_matrix
 
-accr = model.evaluate(test_full_matrix, Y_test)
 
+test_pred = grid.predict(test_full_matrix)
+# accr = model.evaluate(test_full_matrix, Y_test)
+accr = accuracy_score(Y_test, test_pred)
 
-print(data.head())
+print(accr)
