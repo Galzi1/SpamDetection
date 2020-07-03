@@ -27,6 +27,7 @@ from keras.preprocessing import sequence
 from keras.utils import to_categorical
 from keras.callbacks import EarlyStopping
 from textblob import TextBlob
+from imblearn.over_sampling import SMOTE
 
 
 TARGET = 'Category'
@@ -37,6 +38,7 @@ def get_all_words(words_col_df):
     for words in words_col_df:
         for word in words:
             yield word
+
 
 #########################################################################
 ### Preprocessing functions
@@ -237,7 +239,6 @@ def create_features(df):
     return df
 
 
-# feature selection
 def select_features(X_train, y_train):
     # configure to select a subset of features
     fs = SelectFromModel(RandomForestClassifier(n_estimators=1000))
@@ -251,6 +252,18 @@ def select_features(X_train, y_train):
     # X_test_fs = fs.transform(X_test)
     return features_df_fs
 
+
+def handle_imbalance(x_train, y_train):
+    print("Before OverSampling, counts of label '1': {}".format(sum(y_train == 1)))
+    print("Before OverSampling, counts of label '0': {} \n".format(sum(y_train == 0)))
+
+    sm = SMOTE(random_state=2)
+    x_train_res, y_train_res = sm.fit_sample(x_train, y_train.ravel())
+
+    print("After OverSampling, counts of label '1': {}".format(sum(y_train_res == 1)))
+    print("After OverSampling, counts of label '0': {}".format(sum(y_train_res == 0)))
+
+    return x_train_res, y_train_res
 
 # Training models
 def RNN(length):
@@ -279,6 +292,9 @@ data['tempWords'] = data['Words']
 data = create_features(data)
 data = preprocess(data)
 data = data.rename(columns={"Message": "PP_Message", "tempMessage": "Message", "Words": "PP_Words", "tempWords": "Words"})
+
+# Encode target variable
+data[TARGET] = data[TARGET].replace({'ham': 0}, {'spam': 1})
 
 ### Visualization and exploration
 # sns.countplot(data[TARGET])
@@ -323,6 +339,8 @@ sequences_matrix = sequence.pad_sequences(sequences, maxlen=max_len)
 
 feats_matrix = np.float_(X_train_feats.to_numpy())
 full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
+
+full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
 model = RNN(np.size(full_matrix, 1))
 model.summary()
