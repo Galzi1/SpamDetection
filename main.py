@@ -20,8 +20,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from nltk.tokenize.punkt import PunktSentenceTokenizer as PST
 from nltk import FreqDist
+from keras import Sequential
 from keras.models import Model
-from keras.layers import LSTM, Activation, Dense, Dropout, Input, Embedding
+from keras.layers import LSTM, Activation, Dense, Dropout, Input, Embedding, Bidirectional
 from keras.wrappers.scikit_learn import KerasClassifier
 from sklearn.model_selection import RandomizedSearchCV
 from keras.optimizers import RMSprop
@@ -33,8 +34,10 @@ from textblob import TextBlob
 from imblearn.over_sampling import SMOTE
 
 
-TARGET = 'Category'
-BODY = 'Message'
+# TARGET = 'Category'
+# BODY = 'Message'
+TARGET = 'target'
+BODY = 'text'
 USE_FEATURES = False
 HANDLE_IMBALANCE = False
 
@@ -273,16 +276,21 @@ def handle_imbalance(x_train, y_train):
 
 # Training models
 def RNN(vocab_size, embedding_dim, maxlen):
-    inputs = Input(name='inputs', shape=[maxlen])
-    layer = Embedding(vocab_size, embedding_dim, input_length=maxlen)(inputs)
-    layer = LSTM(64)(layer)
-    layer = Dense(256, name='FC1')(layer)
-    layer = Activation('relu')(layer)
-    layer = Dropout(0.5)(layer)
-    layer = Dense(1, name='out_layer')(layer)
-    layer = Activation('sigmoid')(layer)
-    model = Model(inputs=inputs, outputs=layer)
-    model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
+    model = Sequential([
+        Embedding(vocab_size, embedding_dim),
+        Bidirectional(LSTM(embedding_dim)),
+        # layer = LSTM(64)(layer)
+        Dense(embedding_dim, name='FC1'),
+        # layer = Dense(256, name='FC1')(layer)
+        Activation('relu'),
+        Dropout(0.5),
+        Dense(1, name='out_layer'),
+        Activation('sigmoid')
+    ])
+    # inputs = Input(name='inputs', shape=[maxlen])
+    model.summary()
+    # model = Model(inputs=inputs, outputs=layer)
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
     return model
 
 
@@ -291,17 +299,19 @@ ps = nltk.PorterStemmer()
 wnl = WordNetLemmatizer()
 pst = PST()
 
-data = pd.read_csv("spam_text.csv")
-data['Message'] = data['Message'].str.strip()
-data['Words'] = data['Message'].apply(nltk.word_tokenize)
-data['tempMessage'] = data['Message']
+# data = pd.read_csv("spam_text.csv")
+data = pd.read_csv("train.csv")
+data = data.drop(['id', 'location', 'keyword'], axis=1)
+data[BODY] = data[BODY].str.strip()
+data['Words'] = data[BODY].apply(nltk.word_tokenize)
+data['tempMessage'] = data[BODY]
 data['tempWords'] = data['Words']
 data = create_features(data)
 data = preprocess(data)
-data = data.rename(columns={"Message": "PP_Message", "tempMessage": "Message", "Words": "PP_Words", "tempWords": "Words"})
+data = data.rename(columns={BODY: "PP_Message", "tempMessage": BODY, "Words": "PP_Words", "tempWords": "Words"})
 
 # Encode target variable
-data[TARGET] = data[TARGET].replace({'ham': 0}, {'spam': 1})
+# data[TARGET] = data[TARGET].replace({'ham': 0}, {'spam': 1})
 
 ### Visualization and exploration
 # sns.countplot(data[TARGET])
@@ -315,7 +325,7 @@ data[TARGET] = data[TARGET].replace({'ham': 0}, {'spam': 1})
 ###
 
 data.to_csv("temp.csv")
-data = data.drop(['Message', 'Words'], axis=1)
+data = data.drop([BODY, 'Words'], axis=1)
 data_custom_feats = data.drop(['PP_Message', 'PP_Words', TARGET], axis=1)
 data_custom_feats_norm = normalize_columns(data_custom_feats)
 data_custom_feats_fs = select_features(data_custom_feats_norm, data[TARGET])
@@ -337,7 +347,7 @@ X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2)
 X_train_text = X_train['PP_Message']
 X_train_feats = X_train.drop('PP_Message', axis=1)
 
-max_words = 1000
+max_words = 5000
 max_len = 150
 tok = Tokenizer(num_words=max_words)
 tok.fit_on_texts(X_train_text)
@@ -354,7 +364,7 @@ if HANDLE_IMBALANCE:
     full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
 param_grid = dict(vocab_size=[max_words],
-                  embedding_dim=[50],
+                  embedding_dim=[64],
                   maxlen=[np.size(full_matrix, 1)])
 
 model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
