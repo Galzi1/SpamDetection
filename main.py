@@ -12,9 +12,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from normalise import normalise
 from nltk.stem import WordNetLemmatizer
-from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn import model_selection, naive_bayes, svm, preprocessing
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.preprocessing import LabelEncoder
-from sklearn import preprocessing
 from sklearn.feature_selection import SelectFromModel
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -24,7 +25,6 @@ from keras import Sequential
 from keras.models import Model
 from keras.layers import LSTM, Activation, Dense, Dropout, Input, Embedding, Bidirectional
 from keras.wrappers.scikit_learn import KerasClassifier
-from sklearn.model_selection import RandomizedSearchCV
 from keras.optimizers import RMSprop
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing import sequence
@@ -301,7 +301,7 @@ pst = PST()
 
 # data = pd.read_csv("spam_text.csv")
 data = pd.read_csv("train.csv")
-data = data.drop(['id', 'location', 'keyword'], axis=1)
+data = data[[BODY, TARGET]]
 data[BODY] = data[BODY].str.strip()
 data['Words'] = data[BODY].apply(nltk.word_tokenize)
 data['tempMessage'] = data[BODY]
@@ -346,9 +346,43 @@ X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2)
 
 X_train_text = X_train['PP_Message']
 X_train_feats = X_train.drop('PP_Message', axis=1)
+X_test_text = X_test['PP_Message']
+X_test_feats = X_test.drop('PP_Message', axis=1)
 
 max_words = 5000
 max_len = 150
+
+Tfidf_vect = TfidfVectorizer(max_features=max_words)
+Tfidf_vect.fit(data['PP_Message'])
+if USE_FEATURES:
+    Train_X_Tfidf = Tfidf_vect.transform(X_train)
+    Test_X_Tfidf = Tfidf_vect.transform(X_test)
+else:
+    Train_X_Tfidf = Tfidf_vect.transform(X_train_text)
+    Test_X_Tfidf = Tfidf_vect.transform(X_test_text)
+
+# Naive Bayes
+Naive = naive_bayes.MultinomialNB()
+Naive.fit(Train_X_Tfidf, Y_train)
+predictions_NB = Naive.predict(Test_X_Tfidf)
+nb_accr = accuracy_score(predictions_NB, Y_test)
+
+svm_param_grid = dict(C=[0.01, 0.1, 1, 10],
+                  kernel=['linear', 'rbf', 'sigmoid'],
+                  degree=[2, 3, 5, 10],
+                  gamma=['auto', 'scale', 0.1, 1, 10])
+# Classifier - Algorithm - SVM
+# fit the training dataset on the classifier
+# SVM = svm.SVC(C=1.0, kernel='linear', degree=3, gamma='auto')
+# SVM.fit(Train_X_Tfidf, Y_train)
+svm_grid = RandomizedSearchCV(estimator=svm.SVC(), param_distributions=svm_param_grid, cv=5, verbose=1, n_iter=5, refit=True)
+svm_grid_result = svm_grid.fit(Train_X_Tfidf, Y_train)
+# predict the labels on validation dataset
+predictions_SVM = svm_grid.predict(Test_X_Tfidf)
+# Use accuracy_score function to get the accuracy
+svm_accr = accuracy_score(predictions_SVM, Y_test)
+
+# Neural network
 tok = Tokenizer(num_words=max_words)
 tok.fit_on_texts(X_train_text)
 sequences = tok.texts_to_sequences(X_train_text)
@@ -364,7 +398,7 @@ if HANDLE_IMBALANCE:
     full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
 param_grid = dict(vocab_size=[max_words],
-                  embedding_dim=[64],
+                  embedding_dim=[50],
                   maxlen=[np.size(full_matrix, 1)])
 
 model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
@@ -374,8 +408,8 @@ model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
 # model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
 #           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
 
-grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid, cv=4, verbose=1, n_iter=5)
-grid_result = grid.fit(full_matrix, Y_train)
+nn_grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid, cv=4, verbose=1, n_iter=5)
+nn_grid_result = nn_grid.fit(full_matrix, Y_train)
 
 X_test_text = X_test['PP_Message']
 X_test_feats = X_test.drop('PP_Message', axis=1)
@@ -388,8 +422,8 @@ else:
     test_full_matrix = test_sequences_matrix
 
 
-test_pred = grid.predict(test_full_matrix)
+test_pred = nn_grid.predict(test_full_matrix)
 # accr = model.evaluate(test_full_matrix, Y_test)
-accr = accuracy_score(Y_test, test_pred)
+nn_accr = accuracy_score(Y_test, test_pred)
 
-print(accr)
+print(nn_accr)
