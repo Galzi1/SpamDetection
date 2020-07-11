@@ -8,6 +8,7 @@ import pandas as pd
 import re
 import string
 import numpy as np
+import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
 from normalise import normalise
@@ -17,7 +18,7 @@ from sklearn import model_selection, naive_bayes, svm, preprocessing
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.preprocessing import LabelEncoder
 from sklearn.feature_selection import SelectFromModel
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.metrics import accuracy_score
 from nltk.tokenize.punkt import PunktSentenceTokenizer as PST
 from nltk import FreqDist
@@ -32,6 +33,8 @@ from keras.utils import to_categorical
 from keras.callbacks import EarlyStopping
 from textblob import TextBlob
 from imblearn.over_sampling import SMOTE
+from keras_radam import RAdam
+from keras_lookahead import Lookahead
 
 
 # TARGET = 'Category'
@@ -137,6 +140,7 @@ def normalize_columns(df_cols):
     df_normalized = pd.DataFrame(x_scaled)
     df_normalized.columns = names
     return df_normalized
+
 
 def standardize_columns(df_cols):
     names = df_cols.columns
@@ -247,17 +251,20 @@ def create_features(df):
     return df
 
 
-def select_features(X_train, y_train):
+def fit_feature_selector(x_train, y_train):
     # configure to select a subset of features
-    fs = SelectFromModel(RandomForestClassifier(n_estimators=1000))
+    # fs = SelectFromModel(RandomForestClassifier(n_estimators=1000))
+    fs = SelectFromModel(AdaBoostClassifier(n_estimators=100))
     # learn relationship from training data
-    fs.fit(X_train, y_train)
+    fs.fit(x_train, y_train)
     # transform train input data
     # X_train_fs_df = pd.DataFrame(fs.transform(X_train))
     cols = fs.get_support(indices=True)
-    features_df_fs = X_train.iloc[:, cols]
-    # transform test input data
-    # X_test_fs = fs.transform(X_test)
+    return cols
+
+
+def select_features(x, cols):
+    features_df_fs = x.iloc[:, cols]
     return features_df_fs
 
 
@@ -274,18 +281,23 @@ def handle_imbalance(x_train, y_train):
     return x_train_res, y_train_res
 
 
+def mish(x):
+    return x * (tf.tanh(tf.nn.softplus(x)))
+
+
 # Training models
 def RNN(vocab_size, embedding_dim, maxlen):
     model = Sequential([
-        Embedding(vocab_size, embedding_dim),
+        Embedding(vocab_size, embedding_dim, input_length=maxlen),
+        Dropout(0.2),
         Bidirectional(LSTM(embedding_dim)),
+        Dropout(0.2),
         # layer = LSTM(64)(layer)
-        Dense(embedding_dim, name='FC1'),
+        # Dense(embedding_dim, name='FC1', activation='relu'),
+        Dense(embedding_dim, name='FC1', activation=mish),
         # layer = Dense(256, name='FC1')(layer)
-        Activation('relu'),
-        Dropout(0.5),
-        Dense(1, name='out_layer'),
-        Activation('sigmoid')
+        Dropout(0.2),
+        Dense(1, name='out_layer', activation='sigmoid')
     ])
     # inputs = Input(name='inputs', shape=[maxlen])
     model.summary()
@@ -298,6 +310,7 @@ def RNN(vocab_size, embedding_dim, maxlen):
 ps = nltk.PorterStemmer()
 wnl = WordNetLemmatizer()
 pst = PST()
+models_dict = dict()
 
 # data = pd.read_csv("spam_text.csv")
 data = pd.read_csv("train.csv")
@@ -309,9 +322,6 @@ data['tempWords'] = data['Words']
 data = create_features(data)
 data = preprocess(data)
 data = data.rename(columns={BODY: "PP_Message", "tempMessage": BODY, "Words": "PP_Words", "tempWords": "Words"})
-
-# Encode target variable
-# data[TARGET] = data[TARGET].replace({'ham': 0}, {'spam': 1})
 
 ### Visualization and exploration
 # sns.countplot(data[TARGET])
@@ -327,18 +337,18 @@ data = data.rename(columns={BODY: "PP_Message", "tempMessage": BODY, "Words": "P
 data.to_csv("temp.csv")
 data = data.drop([BODY, 'Words'], axis=1)
 data_custom_feats = data.drop(['PP_Message', 'PP_Words', TARGET], axis=1)
-data_custom_feats_norm = normalize_columns(data_custom_feats)
-data_custom_feats_fs = select_features(data_custom_feats_norm, data[TARGET])
+# data_custom_feats_norm = normalize_columns(data_custom_feats)
+# data_custom_feats_fs = select_features(data_custom_feats_norm, data[TARGET])
 data_text = data[['PP_Message', 'PP_Words', TARGET]]
-data = data_text.join(data_custom_feats_fs)
+data = data_text.join(data_custom_feats)
 # data = data_text.join(standardize_columns(data_custom_feats))
 
+# Encode target variable
 le = LabelEncoder()
 Y = data[TARGET]
 Y = le.fit_transform(Y)
 Y = Y.reshape(-1, 1)
 
-###### IMPORTANT TODO: Use stack ensemble to incorporate created features with classifications of binary-input BoW etc. models
 X = data.drop(['PP_Words', TARGET], axis=1)
 # X = data['PP_Message']
 
@@ -346,41 +356,59 @@ X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2)
 
 X_train_text = X_train['PP_Message']
 X_train_feats = X_train.drop('PP_Message', axis=1)
+
+X_train_feats_norm = normalize_columns(X_train_feats)
+selected_cols = fit_feature_selector(X_train_feats_norm, Y_train)
+X_train_feats_sel = select_features(X_train_feats_norm, selected_cols)
+
 X_test_text = X_test['PP_Message']
 X_test_feats = X_test.drop('PP_Message', axis=1)
+
+X_test_feats_norm = normalize_columns(X_test_feats)
+X_test_feats_sel = select_features(X_test_feats_norm, selected_cols)
 
 max_words = 5000
 max_len = 150
 
-Tfidf_vect = TfidfVectorizer(max_features=max_words)
+Tfidf_vect = TfidfVectorizer(max_features=max_words, ngram_range=(1, 2))
 Tfidf_vect.fit(data['PP_Message'])
-if USE_FEATURES:
-    Train_X_Tfidf = Tfidf_vect.transform(X_train)
-    Test_X_Tfidf = Tfidf_vect.transform(X_test)
-else:
-    Train_X_Tfidf = Tfidf_vect.transform(X_train_text)
-    Test_X_Tfidf = Tfidf_vect.transform(X_test_text)
+
+Train_X_Tfidf = Tfidf_vect.transform(X_train_text)
+Test_X_Tfidf = Tfidf_vect.transform(X_test_text)
+
+X_train_full = pd.concat([X_train_feats_sel, pd.DataFrame(Train_X_Tfidf.toarray())], axis=1)
+X_test_full = pd.concat([X_test_feats_sel, pd.DataFrame(Test_X_Tfidf.toarray())], axis=1)
+
 
 # Naive Bayes
-Naive = naive_bayes.MultinomialNB()
-Naive.fit(Train_X_Tfidf, Y_train)
-predictions_NB = Naive.predict(Test_X_Tfidf)
-nb_accr = accuracy_score(predictions_NB, Y_test)
+nb_param_grid = dict(alpha=[0, 0.1, 0.5, 1],
+                    norm=[False, True])
+nb_grid = RandomizedSearchCV(estimator=naive_bayes.ComplementNB(), param_distributions=nb_param_grid, cv=5, verbose=10, n_jobs=-1)
+# naive.fit(Train_X_Tfidf, Y_train)
+# predictions_NB = naive.predict(Test_X_Tfidf)
+nb_grid.fit(X_train_full, np.ravel(Y_train))
+predictions_NB = nb_grid.predict(X_test_full)
+nb_accr = accuracy_score(predictions_NB, np.ravel(Y_test))
+models_dict['nb'] = (nb_grid, nb_accr)
 
 svm_param_grid = dict(C=[0.01, 0.1, 1, 10],
+                  # kernel=['linear', 'rbf', 'sigmoid', 'poly'],
                   kernel=['linear', 'rbf', 'sigmoid'],
-                  degree=[2, 3, 5, 10],
-                  gamma=['auto', 'scale', 0.1, 1, 10])
+                  # degree=[2, 3, 5, 10],
+                  gamma=['auto', 'scale', 0.1, 1])
 # Classifier - Algorithm - SVM
 # fit the training dataset on the classifier
 # SVM = svm.SVC(C=1.0, kernel='linear', degree=3, gamma='auto')
 # SVM.fit(Train_X_Tfidf, Y_train)
-svm_grid = RandomizedSearchCV(estimator=svm.SVC(), param_distributions=svm_param_grid, cv=5, verbose=1, n_iter=5, refit=True)
-svm_grid_result = svm_grid.fit(Train_X_Tfidf, Y_train)
+svm_grid = RandomizedSearchCV(estimator=svm.SVC(), param_distributions=svm_param_grid, cv=5, verbose=10, n_jobs=-1)
+# svm_grid_result = svm_grid.fit(Train_X_Tfidf, Y_train)
+svm_grid_result = svm_grid.fit(X_train_full, np.ravel(Y_train))
 # predict the labels on validation dataset
-predictions_SVM = svm_grid.predict(Test_X_Tfidf)
+# predictions_SVM = svm_grid.predict(Test_X_Tfidf)
+predictions_SVM = svm_grid.predict(X_test_full)
 # Use accuracy_score function to get the accuracy
-svm_accr = accuracy_score(predictions_SVM, Y_test)
+svm_accr = accuracy_score(predictions_SVM, np.ravel(Y_test))
+models_dict['svm'] = (svm_grid, svm_accr)
 
 # Neural network
 tok = Tokenizer(num_words=max_words)
@@ -398,7 +426,7 @@ if HANDLE_IMBALANCE:
     full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
 param_grid = dict(vocab_size=[max_words],
-                  embedding_dim=[50],
+                  embedding_dim=[50, 100],
                   maxlen=[np.size(full_matrix, 1)])
 
 model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
@@ -408,7 +436,7 @@ model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
 # model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
 #           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
 
-nn_grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid, cv=4, verbose=1, n_iter=5)
+nn_grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid, cv=5, verbose=10, n_jobs=-1)
 nn_grid_result = nn_grid.fit(full_matrix, Y_train)
 
 X_test_text = X_test['PP_Message']
@@ -425,5 +453,7 @@ else:
 test_pred = nn_grid.predict(test_full_matrix)
 # accr = model.evaluate(test_full_matrix, Y_test)
 nn_accr = accuracy_score(Y_test, test_pred)
+models_dict['nn'] = (nn_grid, nn_accr)
 
 print(nn_accr)
+print(models_dict)
