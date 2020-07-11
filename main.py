@@ -36,7 +36,6 @@ from imblearn.over_sampling import SMOTE
 from keras_radam import RAdam
 from keras_lookahead import Lookahead
 
-
 # TARGET = 'Category'
 # BODY = 'Message'
 TARGET = 'target'
@@ -163,6 +162,7 @@ def preprocess(df):
     # df = df.apply(lemm_text, axis=1)
     return df
 
+
 #######################################################################
 ### Feature Creation functions
 def words_count(row):
@@ -175,7 +175,8 @@ def characters_count(row):
 
 
 def sentences_count(row):
-    sentences = [sentence for sentence in pst.sentences_from_text(row[BODY], False) if sentence not in string.punctuation]
+    sentences = [sentence for sentence in pst.sentences_from_text(row[BODY], False) if
+                 sentence not in string.punctuation]
     return len(sentences)
 
 
@@ -186,8 +187,8 @@ def punct_count(row):
 
 def all_caps_count(row):
     all_caps_words = [word for word in row['Words'] if (
-        word.isupper() and len(remove_punctuation(word)) > 1 and not bool(
-            re.search('(24:00|2[0-3]:[0-5][0-9]|[0-1][0-9]:[0-5][0-9])', word)))]
+            word.isupper() and len(remove_punctuation(word)) > 1 and not bool(
+        re.search('(24:00|2[0-3]:[0-5][0-9]|[0-1][0-9]:[0-5][0-9])', word)))]
     return len(all_caps_words)
 
 
@@ -306,7 +307,6 @@ def RNN(vocab_size, embedding_dim, maxlen):
     return model
 
 
-
 ps = nltk.PorterStemmer()
 wnl = WordNetLemmatizer()
 pst = PST()
@@ -379,11 +379,23 @@ Test_X_Tfidf = Tfidf_vect.transform(X_test_text)
 X_train_full = pd.concat([X_train_feats_sel, pd.DataFrame(Train_X_Tfidf.toarray())], axis=1)
 X_test_full = pd.concat([X_test_feats_sel, pd.DataFrame(Test_X_Tfidf.toarray())], axis=1)
 
+# AdaBoost
+adab_param_grid = dict(n_estimators=[20, 50, 100],
+                       learning_rate=[0.1, 0.5, 1., 2.])
+adab_grid = RandomizedSearchCV(estimator=AdaBoostClassifier(), param_distributions=adab_param_grid, cv=5, verbose=10,
+                             n_jobs=-1)
+# naive.fit(Train_X_Tfidf, Y_train)
+# predictions_NB = naive.predict(Test_X_Tfidf)
+adab_grid.fit(X_train_full, np.ravel(Y_train))
+predictions_NB = adab_grid.predict(X_test_full)
+adab_accr = accuracy_score(predictions_NB, np.ravel(Y_test))
+models_dict['adab'] = (adab_grid, adab_accr)
 
 # Naive Bayes
 nb_param_grid = dict(alpha=[0, 0.1, 0.5, 1],
-                    norm=[False, True])
-nb_grid = RandomizedSearchCV(estimator=naive_bayes.ComplementNB(), param_distributions=nb_param_grid, cv=5, verbose=10, n_jobs=-1)
+                     norm=[False, True])
+nb_grid = RandomizedSearchCV(estimator=naive_bayes.ComplementNB(), param_distributions=nb_param_grid, cv=5, verbose=10,
+                             n_jobs=-1)
 # naive.fit(Train_X_Tfidf, Y_train)
 # predictions_NB = naive.predict(Test_X_Tfidf)
 nb_grid.fit(X_train_full, np.ravel(Y_train))
@@ -392,10 +404,10 @@ nb_accr = accuracy_score(predictions_NB, np.ravel(Y_test))
 models_dict['nb'] = (nb_grid, nb_accr)
 
 svm_param_grid = dict(C=[0.01, 0.1, 1, 10],
-                  # kernel=['linear', 'rbf', 'sigmoid', 'poly'],
-                  kernel=['linear', 'rbf', 'sigmoid'],
-                  # degree=[2, 3, 5, 10],
-                  gamma=['auto', 'scale', 0.1, 1])
+                      # kernel=['linear', 'rbf', 'sigmoid', 'poly'],
+                      kernel=['linear', 'rbf', 'sigmoid'],
+                      # degree=[2, 3, 5, 10],
+                      gamma=['auto', 'scale', 0.1, 1])
 # Classifier - Algorithm - SVM
 # fit the training dataset on the classifier
 # SVM = svm.SVC(C=1.0, kernel='linear', degree=3, gamma='auto')
@@ -448,7 +460,6 @@ if USE_FEATURES:
     test_full_matrix = np.concatenate((test_sequences_matrix, test_feats_matrix), axis=1)
 else:
     test_full_matrix = test_sequences_matrix
-
 
 test_pred = nn_grid.predict(test_full_matrix)
 # accr = model.evaluate(test_full_matrix, Y_test)
