@@ -15,11 +15,12 @@ from normalise import normalise
 from nltk.stem import WordNetLemmatizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn import model_selection, naive_bayes, svm, preprocessing
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.model_selection import train_test_split, RandomizedSearchCV, GridSearchCV
 from sklearn.preprocessing import LabelEncoder
 from sklearn.feature_selection import SelectFromModel
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.metrics import accuracy_score
+from sklearn.neighbors import KNeighborsClassifier
 from nltk.tokenize.punkt import PunktSentenceTokenizer as PST
 from nltk import FreqDist
 from keras import Sequential
@@ -307,6 +308,20 @@ def RNN(vocab_size, embedding_dim, maxlen):
     return model
 
 
+def train_knn(_x_train, _y_train, _x_test, _y_test):
+    knn_param_grid = dict(n_neighbors=[3, 5, 7],
+                          weights=['uniform', 'distance'],
+                          leaf_size=[2, 30, 50])
+    knn_grid = RandomizedSearchCV(estimator=KNeighborsClassifier(), param_distributions=knn_param_grid, cv=5, verbose=10,
+                                 n_jobs=-1, scoring='accuracy')
+    knn_grid.fit(_x_train, np.ravel(_y_train))
+    predictions_KNN = knn_grid.predict(_x_test)
+    knn_accr = accuracy_score(predictions_KNN, np.ravel(_y_test))
+    print(f'KNN accuracy on test set = {knn_accr}')
+    print(f'KNN best parameters = {knn_grid.best_params_}')
+    return knn_grid, knn_accr
+
+
 ps = nltk.PorterStemmer()
 wnl = WordNetLemmatizer()
 pst = PST()
@@ -379,16 +394,17 @@ Test_X_Tfidf = Tfidf_vect.transform(X_test_text)
 X_train_full = pd.concat([X_train_feats_sel, pd.DataFrame(Train_X_Tfidf.toarray())], axis=1)
 X_test_full = pd.concat([X_test_feats_sel, pd.DataFrame(Test_X_Tfidf.toarray())], axis=1)
 
+# KNN
+models_dict['knn'] = train_knn(X_train_full, Y_train, X_test_full, Y_test)
+
 # AdaBoost
 adab_param_grid = dict(n_estimators=[20, 50, 100],
                        learning_rate=[0.1, 0.5, 1., 2.])
 adab_grid = RandomizedSearchCV(estimator=AdaBoostClassifier(), param_distributions=adab_param_grid, cv=5, verbose=10,
                              n_jobs=-1)
-# naive.fit(Train_X_Tfidf, Y_train)
-# predictions_NB = naive.predict(Test_X_Tfidf)
 adab_grid.fit(X_train_full, np.ravel(Y_train))
-predictions_NB = adab_grid.predict(X_test_full)
-adab_accr = accuracy_score(predictions_NB, np.ravel(Y_test))
+predictions_ADAB = adab_grid.predict(X_test_full)
+adab_accr = accuracy_score(predictions_ADAB, np.ravel(Y_test))
 models_dict['adab'] = (adab_grid, adab_accr)
 
 # Naive Bayes
