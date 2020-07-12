@@ -51,6 +51,18 @@ def get_all_words(words_col_df):
             yield word
 
 
+def get_best_model(d_model):
+    best_model = None
+    best_model_acc = 0
+
+    for model in d_model.items():
+        if best_model is None or model[1] >= best_model_acc:
+            best_model = model[0]
+            best_model_acc = model[1]
+
+    return best_model
+
+
 #########################################################################
 ### Preprocessing functions
 def to_lowercase(row):
@@ -369,6 +381,30 @@ def train_svm(_x_train, _y_train, _x_test, _y_test):
 
     return svm_grid, svm_accr
 
+
+def train_nn(_x_train, _y_train, _x_test, _y_test):
+    nn_param_grid = dict(vocab_size=[max_words],
+                      embedding_dim=[50, 100],
+                      maxlen=[np.size(full_matrix, 1)])
+
+    model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
+    # model = RNN()
+    # model.summary()
+    # model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
+    # model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
+    #           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
+
+    nn_grid = RandomizedSearchCV(estimator=model, param_distributions=nn_param_grid, cv=5, verbose=10, n_jobs=-1,
+                                 scoring='accuracy')
+    nn_grid_result = nn_grid.fit(full_matrix, Y_train)
+
+    predictions_NN = nn_grid.predict(test_full_matrix)
+    # accr = model.evaluate(test_full_matrix, Y_test)
+    nn_accr = accuracy_score(Y_test, predictions_NN)
+
+    return nn_grid, nn_accr
+
+
 ps = nltk.PorterStemmer()
 wnl = WordNetLemmatizer()
 pst = PST()
@@ -441,6 +477,28 @@ Test_X_Tfidf = Tfidf_vect.transform(X_test_text)
 X_train_full = pd.concat([X_train_feats_sel, pd.DataFrame(Train_X_Tfidf.toarray())], axis=1)
 X_test_full = pd.concat([X_test_feats_sel, pd.DataFrame(Test_X_Tfidf.toarray())], axis=1)
 
+tok = Tokenizer(num_words=max_words)
+tok.fit_on_texts(X_train_text)
+sequences = tok.texts_to_sequences(X_train_text)
+sequences_matrix = sequence.pad_sequences(sequences, maxlen=max_len)
+
+X_test_text = X_test['PP_Message']
+X_test_feats = X_test.drop('PP_Message', axis=1)
+test_sequences = tok.texts_to_sequences(X_test_text)
+test_sequences_matrix = sequence.pad_sequences(test_sequences, maxlen=max_len)
+
+if USE_FEATURES:
+    feats_matrix = np.float_(X_train_feats.to_numpy())
+    full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
+    test_feats_matrix = np.float_(X_test_feats.to_numpy())
+    test_full_matrix = np.concatenate((test_sequences_matrix, test_feats_matrix), axis=1)
+else:
+    full_matrix = sequences_matrix
+    test_full_matrix = test_sequences_matrix
+
+if HANDLE_IMBALANCE:
+    full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
+
 # KNN
 models_dict['knn'] = train_knn(X_train_full, Y_train, X_test_full, Y_test)
 print(f'KNN accuracy on test set = {models_dict["knn"][1]}')
@@ -466,48 +524,12 @@ print(f'SVM best parameters = {models_dict["svm"].best_params_}')
 pd.DataFrame(models_dict['svm'][0].cv_results_).to_csv("svm_cv.csv")
 
 # Neural network
-tok = Tokenizer(num_words=max_words)
-tok.fit_on_texts(X_train_text)
-sequences = tok.texts_to_sequences(X_train_text)
-sequences_matrix = sequence.pad_sequences(sequences, maxlen=max_len)
+models_dict['nn'] = train_nn(X_train_full, Y_train, X_test_full, Y_test)
+print(f'Neural Network accuracy on test set = {models_dict["nn"][1]}')
+print(f'Neural Network best parameters = {models_dict["nn"].best_params_}')
+pd.DataFrame(models_dict['nn'][0].cv_results_).to_csv("nn_cv.csv")
 
-if USE_FEATURES:
-    feats_matrix = np.float_(X_train_feats.to_numpy())
-    full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
-else:
-    full_matrix = sequences_matrix
-
-if HANDLE_IMBALANCE:
-    full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
-
-param_grid = dict(vocab_size=[max_words],
-                  embedding_dim=[50, 100],
-                  maxlen=[np.size(full_matrix, 1)])
-
-model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
-# model = RNN()
-# model.summary()
-# model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
-# model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
-#           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
-
-nn_grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid, cv=5, verbose=10, n_jobs=-1)
-nn_grid_result = nn_grid.fit(full_matrix, Y_train)
-
-X_test_text = X_test['PP_Message']
-X_test_feats = X_test.drop('PP_Message', axis=1)
-test_sequences = tok.texts_to_sequences(X_test_text)
-test_sequences_matrix = sequence.pad_sequences(test_sequences, maxlen=max_len)
-if USE_FEATURES:
-    test_feats_matrix = np.float_(X_test_feats.to_numpy())
-    test_full_matrix = np.concatenate((test_sequences_matrix, test_feats_matrix), axis=1)
-else:
-    test_full_matrix = test_sequences_matrix
-
-test_pred = nn_grid.predict(test_full_matrix)
-# accr = model.evaluate(test_full_matrix, Y_test)
-nn_accr = accuracy_score(Y_test, test_pred)
-models_dict['nn'] = (nn_grid, nn_accr)
-
-print(nn_accr)
 print(models_dict)
+
+# Preprocess final_data (to submit)
+final_predict = get_best_model(models_dict).predict(final_data)
