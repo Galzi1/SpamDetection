@@ -1,3 +1,8 @@
+Spam detection
 only dtm: 0.9847533702850342
 dtm + custom features: 0.9739910364151001
 dtm + custom features (normalized 0 to 1): 0.9874439239501953		0.9829596281051636
+
+Disaster detection
+0.7747866053841103
+adam optimizer 0.7826657912015759
