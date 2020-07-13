@@ -9,6 +9,7 @@ import re
 import string
 import numpy as np
 import tensorflow as tf
+import keras.backend.tensorflow_backend as tfback
 import matplotlib.pyplot as plt
 import seaborn as sns
 from normalise import normalise
@@ -25,7 +26,7 @@ from nltk.tokenize.punkt import PunktSentenceTokenizer as PST
 from nltk import FreqDist
 from keras import Sequential
 from keras.models import Model
-from keras.layers import LSTM, Activation, Dense, Dropout, Input, Embedding, Bidirectional
+from keras.layers import LSTM, Activation, Dense, Dropout, Input, Embedding, Bidirectional, Conv1D, MaxPooling1D, Flatten
 from keras.wrappers.scikit_learn import KerasClassifier
 from keras.optimizers import RMSprop
 from keras.preprocessing.text import Tokenizer
@@ -300,6 +301,26 @@ def mish(x):
 
 
 # Training models
+def CNN(vocab_size, embedding_dim, maxlen):
+    model = Sequential([
+        Embedding(vocab_size, embedding_dim, input_length=maxlen, input_shape=(maxlen, )),
+        Conv1D(embedding_dim, 5, name='l_cov1', activation=mish, data_format='channels_first'),
+        MaxPooling1D(5, name='l_pool1'),
+        Conv1D(embedding_dim, 5, name='l_cov2', activation=mish, data_format='channels_first'),
+        MaxPooling1D(5, name='l_pool2'),
+        Conv1D(embedding_dim, 5, name='l_cov3', activation=mish, data_format='channels_first'),
+        MaxPooling1D(35, name='l_pool3'),   # global max pooling
+        Flatten(name='l_flat'),
+        # Dense(128, name='l_dense', activation='relu'),
+        Dense(1, name='out_layer', activation='sigmoid')
+    ])
+    # inputs = Input(name='inputs', shape=[maxlen])
+    model.summary()
+    # model = Model(inputs=inputs, outputs=layer)
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return model
+
+
 def RNN(vocab_size, embedding_dim, maxlen):
     model = Sequential([
         Embedding(vocab_size, embedding_dim, input_length=maxlen),
@@ -382,8 +403,25 @@ def train_svm(_x_train, _y_train, _x_test, _y_test):
     return svm_grid, svm_accr
 
 
-def train_nn(_x_train, _y_train, _x_test, _y_test):
-    nn_param_grid = dict(vocab_size=[max_words],
+def train_cnn(_x_train, _y_train, _x_test, _y_test):
+    cnn_param_grid = dict(vocab_size=[max_words],
+                      embedding_dim=[50, 64, 100, 128],
+                      maxlen=[np.size(full_matrix, 1)])
+
+    model = KerasClassifier(build_fn=CNN, epochs=10, batch_size=32, verbose=True)
+
+    cnn_grid = RandomizedSearchCV(estimator=model, param_distributions=cnn_param_grid, cv=5, verbose=10, n_jobs=-1,
+                                 scoring='accuracy')
+    cnn_grid_result = cnn_grid.fit(full_matrix, Y_train, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0002)])
+
+    predictions_CNN = cnn_grid.predict(test_full_matrix)
+    cnn_accr = accuracy_score(Y_test, predictions_CNN)
+
+    return cnn_grid, cnn_accr
+
+
+def train_rnn(_x_train, _y_train, _x_test, _y_test):
+    rnn_param_grid = dict(vocab_size=[max_words],
                       embedding_dim=[50, 100],
                       maxlen=[np.size(full_matrix, 1)])
 
@@ -394,16 +432,32 @@ def train_nn(_x_train, _y_train, _x_test, _y_test):
     # model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
     #           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
 
-    nn_grid = RandomizedSearchCV(estimator=model, param_distributions=nn_param_grid, cv=5, verbose=10, n_jobs=-1,
+    rnn_grid = RandomizedSearchCV(estimator=model, param_distributions=rnn_param_grid, cv=5, verbose=10, n_jobs=-1,
                                  scoring='accuracy')
-    nn_grid_result = nn_grid.fit(full_matrix, Y_train)
+    rnn_grid_result = rnn_grid.fit(full_matrix, Y_train)
 
-    predictions_NN = nn_grid.predict(test_full_matrix)
+    predictions_RNN = rnn_grid.predict(test_full_matrix)
     # accr = model.evaluate(test_full_matrix, Y_test)
-    nn_accr = accuracy_score(Y_test, predictions_NN)
+    rnn_accr = accuracy_score(Y_test, predictions_RNN)
 
-    return nn_grid, nn_accr
+    return rnn_grid, rnn_accr
 
+
+def _get_available_gpus():
+    """Get a list of available gpu devices (formatted as strings).
+
+    # Returns
+        A list of available GPU devices.
+    """
+    #global _LOCAL_DEVICES
+    if tfback._LOCAL_DEVICES is None:
+        devices = tf.config.list_logical_devices()
+        tfback._LOCAL_DEVICES = [x.name for x in devices]
+    return [x for x in tfback._LOCAL_DEVICES if 'device:gpu' in x.lower()]
+
+
+tfback._get_available_gpus = _get_available_gpus
+tfback._get_available_gpus()
 
 ps = nltk.PorterStemmer()
 wnl = WordNetLemmatizer()
@@ -499,37 +553,57 @@ else:
 if HANDLE_IMBALANCE:
     full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
+# Models control flags
+knn_flag = False
+adaboost_flag = False
+nb_flag = False
+svm_flag = False
+cnn_flag = True
+rnn_flag = False
+
+
 # KNN
-models_dict['knn'] = train_knn(X_train_full, Y_train, X_test_full, Y_test)
-print(f'KNN accuracy on test set = {models_dict["knn"][1]}')
-print(f'KNN best parameters = {models_dict["knn"].best_params_}')
-pd.DataFrame(models_dict['knn'][0].cv_results_).to_csv("knn_cv.csv")
+if knn_flag:
+    models_dict['knn'] = train_knn(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'KNN accuracy on test set = {models_dict["knn"][1]}')
+    print(f'KNN best parameters = {models_dict["knn"][0].best_params_}')
+    pd.DataFrame(models_dict['knn'][0].cv_results_).to_csv("knn_cv.csv")
 
 # AdaBoost
-models_dict['adaboost'] = train_adaboost(X_train_full, Y_train, X_test_full, Y_test)
-print(f'AdaBoost accuracy on test set = {models_dict["adaboost"][1]}')
-print(f'AdaBoost best parameters = {models_dict["adaboost"].best_params_}')
-pd.DataFrame(models_dict['adaboost'][0].cv_results_).to_csv("adaboost_cv.csv")
+if adaboost_flag:
+    models_dict['adaboost'] = train_adaboost(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'AdaBoost accuracy on test set = {models_dict["adaboost"][1]}')
+    print(f'AdaBoost best parameters = {models_dict["adaboost"][0].best_params_}')
+    pd.DataFrame(models_dict['adaboost'][0].cv_results_).to_csv("adaboost_cv.csv")
 
 # Naive Bayes
-models_dict['nb'] = train_nb(X_train_full, Y_train, X_test_full, Y_test)
-print(f'NaiveBayes accuracy on test set = {models_dict["nb"][1]}')
-print(f'NaiveBayes best parameters = {models_dict["nb"].best_params_}')
-pd.DataFrame(models_dict['nb'][0].cv_results_).to_csv("nb_cv.csv")
+if nb_flag:
+    models_dict['nb'] = train_nb(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'NaiveBayes accuracy on test set = {models_dict["nb"][1]}')
+    print(f'NaiveBayes best parameters = {models_dict["nb"][0].best_params_}')
+    pd.DataFrame(models_dict['nb'][0].cv_results_).to_csv("nb_cv.csv")
 
 # SVM
-models_dict['svm'] = train_svm(X_train_full, Y_train, X_test_full, Y_test)
-print(f'SVM accuracy on test set = {models_dict["svm"][1]}')
-print(f'SVM best parameters = {models_dict["svm"].best_params_}')
-pd.DataFrame(models_dict['svm'][0].cv_results_).to_csv("svm_cv.csv")
+if svm_flag:
+    models_dict['svm'] = train_svm(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'SVM accuracy on test set = {models_dict["svm"][1]}')
+    print(f'SVM best parameters = {models_dict["svm"][0].best_params_}')
+    pd.DataFrame(models_dict['svm'][0].cv_results_).to_csv("svm_cv.csv")
 
-# Neural network
-models_dict['nn'] = train_nn(X_train_full, Y_train, X_test_full, Y_test)
-print(f'Neural Network accuracy on test set = {models_dict["nn"][1]}')
-print(f'Neural Network best parameters = {models_dict["nn"].best_params_}')
-pd.DataFrame(models_dict['nn'][0].cv_results_).to_csv("nn_cv.csv")
+# Neural networks
+if cnn_flag:
+    models_dict['cnn'] = train_cnn(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'Convolution Neural Network accuracy on test set = {models_dict["cnn"][1]}')
+    print(f'Convolution Neural Network best parameters = {models_dict["cnn"][0].best_params_}')
+    pd.DataFrame(models_dict['cnn'][0].cv_results_).to_csv("cnn_cv.csv")
+
+if rnn_flag:
+    models_dict['rnn'] = train_rnn(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'Recurrent Neural Network accuracy on test set = {models_dict["rnn"][1]}')
+    print(f'Recurrent Neural Network best parameters = {models_dict["rnn"][0].best_params_}')
+    pd.DataFrame(models_dict['rnn'][0].cv_results_).to_csv("rnn_cv.csv")
 
 print(models_dict)
 
 # Preprocess final_data (to submit)
-final_predict = get_best_model(models_dict).predict(final_data)
+# final_predict = get_best_model(models_dict).predict(final_data)
