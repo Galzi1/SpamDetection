@@ -51,6 +51,18 @@ def get_all_words(words_col_df):
             yield word
 
 
+def get_best_model(d_model):
+    best_model = None
+    best_model_acc = 0
+
+    for model in d_model.items():
+        if best_model is None or model[1] >= best_model_acc:
+            best_model = model[0]
+            best_model_acc = model[1]
+
+    return best_model
+
+
 #########################################################################
 ### Preprocessing functions
 def to_lowercase(row):
@@ -312,14 +324,85 @@ def train_knn(_x_train, _y_train, _x_test, _y_test):
     knn_param_grid = dict(n_neighbors=[3, 5, 7],
                           weights=['uniform', 'distance'],
                           leaf_size=[2, 30, 50])
-    knn_grid = RandomizedSearchCV(estimator=KNeighborsClassifier(), param_distributions=knn_param_grid, cv=5, verbose=10,
-                                 n_jobs=-1, scoring='accuracy')
+    knn_grid = RandomizedSearchCV(estimator=KNeighborsClassifier(), param_distributions=knn_param_grid, cv=5,
+                                  verbose=10, n_jobs=-1, scoring='accuracy')
     knn_grid.fit(_x_train, np.ravel(_y_train))
     predictions_KNN = knn_grid.predict(_x_test)
     knn_accr = accuracy_score(predictions_KNN, np.ravel(_y_test))
-    print(f'KNN accuracy on test set = {knn_accr}')
-    print(f'KNN best parameters = {knn_grid.best_params_}')
+
     return knn_grid, knn_accr
+
+
+def train_adaboost(_x_train, _y_train, _x_test, _y_test):
+    adab_param_grid = dict(n_estimators=[20, 50, 100],
+                           learning_rate=[0.1, 0.5, 1., 2.])
+    adab_grid = RandomizedSearchCV(estimator=AdaBoostClassifier(), param_distributions=adab_param_grid, cv=5,
+                                   verbose=10, n_jobs=-1, scoring='accuracy')
+    adab_grid.fit(_x_train, np.ravel(_y_train))
+    predictions_ADAB = adab_grid.predict(_x_test)
+    adab_accr = accuracy_score(predictions_ADAB, np.ravel(_y_test))
+
+    return adab_grid, adab_accr
+
+
+def train_nb(_x_train, _y_train, _x_test, _y_test):
+    nb_param_grid = dict(alpha=[0, 0.1, 0.5, 1],
+                         norm=[False, True])
+    nb_grid = RandomizedSearchCV(estimator=naive_bayes.ComplementNB(), param_distributions=nb_param_grid, cv=5,
+                                 verbose=10, n_jobs=-1, scoring='accuracy')
+    # naive.fit(Train_X_Tfidf, Y_train)
+    # predictions_NB = naive.predict(Test_X_Tfidf)
+    nb_grid.fit(_x_train, np.ravel(_y_train))
+    predictions_NB = nb_grid.predict(_x_test)
+    nb_accr = accuracy_score(predictions_NB, np.ravel(_y_test))
+
+    return nb_grid, nb_accr
+
+
+def train_svm(_x_train, _y_train, _x_test, _y_test):
+    svm_param_grid = dict(C=[0.01, 0.1, 1, 10],
+                          # kernel=['linear', 'rbf', 'sigmoid', 'poly'],
+                          kernel=['linear', 'rbf', 'sigmoid'],
+                          # degree=[2, 3, 5, 10],
+                          gamma=['auto', 'scale', 0.1, 1])
+    # Classifier - Algorithm - SVM
+    # fit the training dataset on the classifier
+    # SVM = svm.SVC(C=1.0, kernel='linear', degree=3, gamma='auto')
+    # SVM.fit(Train_X_Tfidf, Y_train)
+    svm_grid = RandomizedSearchCV(estimator=svm.SVC(), param_distributions=svm_param_grid, cv=5, verbose=10, n_jobs=-1,
+                                  scoring='accuracy')
+    # svm_grid_result = svm_grid.fit(Train_X_Tfidf, Y_train)
+    svm_grid_result = svm_grid.fit(_x_train, np.ravel(_y_train))
+    # predict the labels on validation dataset
+    # predictions_SVM = svm_grid.predict(Test_X_Tfidf)
+    predictions_SVM = svm_grid.predict(_x_test)
+    # Use accuracy_score function to get the accuracy
+    svm_accr = accuracy_score(predictions_SVM, np.ravel(_y_test))
+
+    return svm_grid, svm_accr
+
+
+def train_nn(_x_train, _y_train, _x_test, _y_test):
+    nn_param_grid = dict(vocab_size=[max_words],
+                      embedding_dim=[50, 100],
+                      maxlen=[np.size(full_matrix, 1)])
+
+    model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
+    # model = RNN()
+    # model.summary()
+    # model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
+    # model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
+    #           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
+
+    nn_grid = RandomizedSearchCV(estimator=model, param_distributions=nn_param_grid, cv=5, verbose=10, n_jobs=-1,
+                                 scoring='accuracy')
+    nn_grid_result = nn_grid.fit(full_matrix, Y_train)
+
+    predictions_NN = nn_grid.predict(test_full_matrix)
+    # accr = model.evaluate(test_full_matrix, Y_test)
+    nn_accr = accuracy_score(Y_test, predictions_NN)
+
+    return nn_grid, nn_accr
 
 
 ps = nltk.PorterStemmer()
@@ -394,93 +477,59 @@ Test_X_Tfidf = Tfidf_vect.transform(X_test_text)
 X_train_full = pd.concat([X_train_feats_sel, pd.DataFrame(Train_X_Tfidf.toarray())], axis=1)
 X_test_full = pd.concat([X_test_feats_sel, pd.DataFrame(Test_X_Tfidf.toarray())], axis=1)
 
-# KNN
-models_dict['knn'] = train_knn(X_train_full, Y_train, X_test_full, Y_test)
-
-# AdaBoost
-adab_param_grid = dict(n_estimators=[20, 50, 100],
-                       learning_rate=[0.1, 0.5, 1., 2.])
-adab_grid = RandomizedSearchCV(estimator=AdaBoostClassifier(), param_distributions=adab_param_grid, cv=5, verbose=10,
-                             n_jobs=-1)
-adab_grid.fit(X_train_full, np.ravel(Y_train))
-predictions_ADAB = adab_grid.predict(X_test_full)
-adab_accr = accuracy_score(predictions_ADAB, np.ravel(Y_test))
-models_dict['adab'] = (adab_grid, adab_accr)
-
-# Naive Bayes
-nb_param_grid = dict(alpha=[0, 0.1, 0.5, 1],
-                     norm=[False, True])
-nb_grid = RandomizedSearchCV(estimator=naive_bayes.ComplementNB(), param_distributions=nb_param_grid, cv=5, verbose=10,
-                             n_jobs=-1)
-# naive.fit(Train_X_Tfidf, Y_train)
-# predictions_NB = naive.predict(Test_X_Tfidf)
-nb_grid.fit(X_train_full, np.ravel(Y_train))
-predictions_NB = nb_grid.predict(X_test_full)
-nb_accr = accuracy_score(predictions_NB, np.ravel(Y_test))
-models_dict['nb'] = (nb_grid, nb_accr)
-
-svm_param_grid = dict(C=[0.01, 0.1, 1, 10],
-                      # kernel=['linear', 'rbf', 'sigmoid', 'poly'],
-                      kernel=['linear', 'rbf', 'sigmoid'],
-                      # degree=[2, 3, 5, 10],
-                      gamma=['auto', 'scale', 0.1, 1])
-# Classifier - Algorithm - SVM
-# fit the training dataset on the classifier
-# SVM = svm.SVC(C=1.0, kernel='linear', degree=3, gamma='auto')
-# SVM.fit(Train_X_Tfidf, Y_train)
-svm_grid = RandomizedSearchCV(estimator=svm.SVC(), param_distributions=svm_param_grid, cv=5, verbose=10, n_jobs=-1)
-# svm_grid_result = svm_grid.fit(Train_X_Tfidf, Y_train)
-svm_grid_result = svm_grid.fit(X_train_full, np.ravel(Y_train))
-# predict the labels on validation dataset
-# predictions_SVM = svm_grid.predict(Test_X_Tfidf)
-predictions_SVM = svm_grid.predict(X_test_full)
-# Use accuracy_score function to get the accuracy
-svm_accr = accuracy_score(predictions_SVM, np.ravel(Y_test))
-models_dict['svm'] = (svm_grid, svm_accr)
-
-# Neural network
 tok = Tokenizer(num_words=max_words)
 tok.fit_on_texts(X_train_text)
 sequences = tok.texts_to_sequences(X_train_text)
 sequences_matrix = sequence.pad_sequences(sequences, maxlen=max_len)
 
-if USE_FEATURES:
-    feats_matrix = np.float_(X_train_feats.to_numpy())
-    full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
-else:
-    full_matrix = sequences_matrix
-
-if HANDLE_IMBALANCE:
-    full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
-
-param_grid = dict(vocab_size=[max_words],
-                  embedding_dim=[50, 100],
-                  maxlen=[np.size(full_matrix, 1)])
-
-model = KerasClassifier(build_fn=RNN, epochs=10, batch_size=128, verbose=True)
-# model = RNN()
-# model.summary()
-# model.compile(loss='binary_crossentropy', optimizer=RMSprop(), metrics=['accuracy'])
-# model.fit(full_matrix, Y_train, batch_size=128, epochs=10,
-#           validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', min_delta=0.0001)])
-
-nn_grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid, cv=5, verbose=10, n_jobs=-1)
-nn_grid_result = nn_grid.fit(full_matrix, Y_train)
-
 X_test_text = X_test['PP_Message']
 X_test_feats = X_test.drop('PP_Message', axis=1)
 test_sequences = tok.texts_to_sequences(X_test_text)
 test_sequences_matrix = sequence.pad_sequences(test_sequences, maxlen=max_len)
+
 if USE_FEATURES:
+    feats_matrix = np.float_(X_train_feats.to_numpy())
+    full_matrix = np.concatenate((sequences_matrix, feats_matrix), axis=1)
     test_feats_matrix = np.float_(X_test_feats.to_numpy())
     test_full_matrix = np.concatenate((test_sequences_matrix, test_feats_matrix), axis=1)
 else:
+    full_matrix = sequences_matrix
     test_full_matrix = test_sequences_matrix
 
-test_pred = nn_grid.predict(test_full_matrix)
-# accr = model.evaluate(test_full_matrix, Y_test)
-nn_accr = accuracy_score(Y_test, test_pred)
-models_dict['nn'] = (nn_grid, nn_accr)
+if HANDLE_IMBALANCE:
+    full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
-print(nn_accr)
+# KNN
+models_dict['knn'] = train_knn(X_train_full, Y_train, X_test_full, Y_test)
+print(f'KNN accuracy on test set = {models_dict["knn"][1]}')
+print(f'KNN best parameters = {models_dict["knn"].best_params_}')
+pd.DataFrame(models_dict['knn'][0].cv_results_).to_csv("knn_cv.csv")
+
+# AdaBoost
+models_dict['adaboost'] = train_adaboost(X_train_full, Y_train, X_test_full, Y_test)
+print(f'AdaBoost accuracy on test set = {models_dict["adaboost"][1]}')
+print(f'AdaBoost best parameters = {models_dict["adaboost"].best_params_}')
+pd.DataFrame(models_dict['adaboost'][0].cv_results_).to_csv("adaboost_cv.csv")
+
+# Naive Bayes
+models_dict['nb'] = train_nb(X_train_full, Y_train, X_test_full, Y_test)
+print(f'NaiveBayes accuracy on test set = {models_dict["nb"][1]}')
+print(f'NaiveBayes best parameters = {models_dict["nb"].best_params_}')
+pd.DataFrame(models_dict['nb'][0].cv_results_).to_csv("nb_cv.csv")
+
+# SVM
+models_dict['svm'] = train_svm(X_train_full, Y_train, X_test_full, Y_test)
+print(f'SVM accuracy on test set = {models_dict["svm"][1]}')
+print(f'SVM best parameters = {models_dict["svm"].best_params_}')
+pd.DataFrame(models_dict['svm'][0].cv_results_).to_csv("svm_cv.csv")
+
+# Neural network
+models_dict['nn'] = train_nn(X_train_full, Y_train, X_test_full, Y_test)
+print(f'Neural Network accuracy on test set = {models_dict["nn"][1]}')
+print(f'Neural Network best parameters = {models_dict["nn"].best_params_}')
+pd.DataFrame(models_dict['nn'][0].cv_results_).to_csv("nn_cv.csv")
+
 print(models_dict)
+
+# Preprocess final_data (to submit)
+final_predict = get_best_model(models_dict).predict(final_data)
