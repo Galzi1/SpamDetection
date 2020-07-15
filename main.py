@@ -19,7 +19,8 @@ from sklearn import model_selection, naive_bayes, svm, preprocessing
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, GridSearchCV
 from sklearn.preprocessing import LabelEncoder
 from sklearn.feature_selection import SelectFromModel
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, StackingClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.neighbors import KNeighborsClassifier
 from nltk.tokenize.punkt import PunktSentenceTokenizer as PST
@@ -241,7 +242,6 @@ def get_sentiment(row):
     return TextBlob(row[BODY]).sentiment
 
 
-# tODO: remove spaces throughout, both in body and in words
 def create_features(df):
     df['Words_Count'] = df.apply(words_count, axis=1)
     df['Chars_Count'] = df.apply(characters_count, axis=1)
@@ -266,12 +266,12 @@ def create_features(df):
     return df
 
 
-def fit_feature_selector(x_train, y_train):
+def fit_feature_selector(_x_train, _y_train):
     # configure to select a subset of features
     # fs = SelectFromModel(RandomForestClassifier(n_estimators=1000))
     fs = SelectFromModel(AdaBoostClassifier(n_estimators=100))
     # learn relationship from training data
-    fs.fit(x_train, y_train)
+    fs.fit(_x_train, _y_train)
     # transform train input data
     # X_train_fs_df = pd.DataFrame(fs.transform(X_train))
     cols = fs.get_support(indices=True)
@@ -341,6 +341,19 @@ def RNN(vocab_size, embedding_dim, maxlen):
     return model
 
 
+def train_lr(_x_train, _y_train, _x_test, _y_test):
+    lr_param_grid = dict(C=[1, 10],
+                         class_weight=[None, 'balanced'],
+                         solver=['newton-cg', 'lbfgs', 'liblinear', 'sag', 'saga'])
+    lr_grid = RandomizedSearchCV(estimator=LogisticRegression(), param_distributions=lr_param_grid, cv=5,
+                                  verbose=10, n_jobs=-1, scoring='accuracy')
+    lr_grid.fit(_x_train, np.ravel(_y_train))
+    predictions_LR = lr_grid.predict(_x_test)
+    lr_accr = accuracy_score(predictions_LR, np.ravel(_y_test))
+
+    return lr_grid, lr_accr
+
+
 def train_knn(_x_train, _y_train, _x_test, _y_test):
     knn_param_grid = dict(n_neighbors=[3, 5, 7],
                           weights=['uniform', 'distance'],
@@ -401,6 +414,46 @@ def train_svm(_x_train, _y_train, _x_test, _y_test):
     svm_accr = accuracy_score(predictions_SVM, np.ravel(_y_test))
 
     return svm_grid, svm_accr
+
+
+def train_stack(_x_train, _y_train, _x_test, _y_test, parameters_dict=None):
+    # define the base models
+    level0 = list()
+    if parameters_dict is not None and 'lr' in parameters_dict:
+        level0.append(('lr', LogisticRegression(parameters_dict['lr'])))
+    else:
+        level0.append(('lr', LogisticRegression()))
+
+    if parameters_dict is not None and 'knn' in parameters_dict:
+        level0.append(('knn', KNeighborsClassifier(parameters_dict['knn'])))
+    else:
+        level0.append(('knn', KNeighborsClassifier()))
+
+    if parameters_dict is not None and 'adaboost' in parameters_dict:
+        level0.append(('adaboost', AdaBoostClassifier(parameters_dict['adaboost'])))
+    else:
+        level0.append(('adaboost', AdaBoostClassifier()))
+
+    if parameters_dict is not None and 'nb' in parameters_dict:
+        level0.append(('nb', naive_bayes.ComplementNB(parameters_dict['nb'])))
+    else:
+        level0.append(('nb', naive_bayes.ComplementNB()))
+
+    if parameters_dict is not None and 'svm' in parameters_dict:
+        level0.append(('svm', svm.SVC(parameters_dict['svm'])))
+    else:
+        level0.append(('svm', svm.SVC()))
+
+    # define meta learner model
+    level1 = LogisticRegression()
+    # define the stacking ensemble
+    model = StackingClassifier(estimators=level0, final_estimator=level1, cv=5)
+
+    model.fit(_x_train, np.ravel(_y_train))
+    predictions_STACK = model.predict(_x_test)
+    stack_accr = accuracy_score(predictions_STACK, np.ravel(_y_test))
+
+    return model, stack_accr
 
 
 def train_cnn(_x_train, _y_train, _x_test, _y_test):
@@ -554,14 +607,22 @@ if HANDLE_IMBALANCE:
     full_matrix, Y_train = handle_imbalance(full_matrix, Y_train)
 
 # Models control flags
+lr_flag = False
 knn_flag = False
 adaboost_flag = False
 nb_flag = False
 svm_flag = False
-cnn_flag = True
+stack_flag = True
+cnn_flag = False
 rnn_flag = False
 
-
+# Logistic Regression
+if lr_flag:
+    models_dict['lr'] = train_lr(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'LR accuracy on test set = {models_dict["lr"][1]}')
+    print(f'LR best parameters = {models_dict["lr"][0].best_params_}')
+    pd.DataFrame(models_dict['lr'][0].cv_results_).to_csv("lr_cv.csv")
+.0
 # KNN
 if knn_flag:
     models_dict['knn'] = train_knn(X_train_full, Y_train, X_test_full, Y_test)
@@ -589,6 +650,11 @@ if svm_flag:
     print(f'SVM accuracy on test set = {models_dict["svm"][1]}')
     print(f'SVM best parameters = {models_dict["svm"][0].best_params_}')
     pd.DataFrame(models_dict['svm'][0].cv_results_).to_csv("svm_cv.csv")
+
+# Stacking classifier
+if stack_flag:
+    models_dict['stack'] = train_stack(X_train_full, Y_train, X_test_full, Y_test)
+    print(f'Stacking Classifier accuracy on test set = {models_dict["stack"][1]}')
 
 # Neural networks
 if cnn_flag:
